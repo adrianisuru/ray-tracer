@@ -1,5 +1,9 @@
 use clap::{App, Arg};
-use image::{ImageBuffer, Rgb};
+use glam::f32::vec3;
+use glam::Vec3;
+use image::{ImageBuffer, Rgb, RgbImage};
+use ray_tracer::Ray;
+use ray_tracer::Sphere;
 
 fn main() {
     let matches = App::new(env!("CARGO_PKG_NAME"))
@@ -47,10 +51,44 @@ fn main() {
 
     let mut imgbuf = ImageBuffer::new(width, height);
 
+    // Camera
+    let aspect_ratio = width as f32 / height as f32;
+    let viewort_height = 2.;
+    let viewport_width = aspect_ratio * viewort_height;
+    let focal_length = 1.;
+
+    let origin = Vec3::zero();
+    let horizontal = viewport_width * Vec3::unit_x();
+    let vertical = viewort_height * Vec3::unit_y();
+    let diagonal = focal_length * Vec3::unit_z();
+    let upper_left = origin + horizontal / 2. + vertical / 2. - diagonal;
+
+    let sphere = Sphere {
+        center: vec3(0., 0., -1.),
+        radius: 0.5,
+    };
     imgbuf.enumerate_pixels_mut().for_each(|(x, y, pixel)| {
-        let r = (0.3 * x as f32) as u8;
-        let b = (0.3 * y as f32) as u8;
-        *pixel = Rgb([r, 0, b]);
+        // Coordinates
+        let u = x as f32 / width as f32;
+        let v = y as f32 / height as f32;
+
+        let direction = upper_left - u * horizontal - v * vertical - origin;
+        let r = Ray { origin, direction };
+
+        let t = sphere.intersects(&r);
+
+        let c = if t > 0. {
+            let n = (r.at(t) + Vec3::unit_z()).normalize();
+            0.5 * (n + Vec3::one())
+        } else {
+            let t = 0.5 * (r.direction.normalize().y + 1.);
+            (1. - t) * Vec3::one() + t * vec3(0.5, 0.7, 1.0)
+        };
+
+        let r = (c.x * u8::MAX as f32) as u8;
+        let g = (c.y * u8::MAX as f32) as u8;
+        let b = (c.z * u8::MAX as f32) as u8;
+        *pixel = Rgb([r, g, b]);
     });
 
     imgbuf.save(output).unwrap();

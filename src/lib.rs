@@ -1,3 +1,4 @@
+use glam::f32::vec3;
 use glam::Vec3;
 
 pub struct Ray {
@@ -44,5 +45,54 @@ impl Sphere {
         } else {
             (-b - discriminant.sqrt()) / (2. * a)
         }
+    }
+}
+
+pub struct PerspCamera {
+    /// Location of the center of the viewport
+    pub location: Vec3,
+
+    //    /// Rotation around x, y, and z axis' represented by `rotation`'s x, y, and z
+    //    /// corrdinates respectively
+    //    pub rotation: Vec3,
+    /// Distance from eye to viewport
+    pub focal_length: f32,
+
+    pub aspect_ratio: f32,
+    pub zoom: f32,
+}
+
+impl Camera for PerspCamera {
+    fn ray_through(&self, u: f32, v: f32) -> Ray {
+        let origin =
+            self.location + self.zoom * self.focal_length * Vec3::unit_z();
+        let direction = self.zoom * vec3(u * self.aspect_ratio, v, 0.)
+            + self.location
+            - origin;
+        Ray { origin, direction }
+    }
+}
+
+pub trait Camera {
+    fn ray_through(&self, u: f32, v: f32) -> Ray;
+}
+
+pub struct OrthoCamera {
+    /// Location of the center of the viewport
+    pub location: Vec3,
+
+    //    /// Rotation around x, y, and z axis' represented by `rotation`'s x, y, and z
+    //    /// corrdinates respectively
+    //    pub rotation: Vec3,
+    pub aspect_ratio: f32,
+    pub zoom: f32,
+}
+
+impl Camera for OrthoCamera {
+    fn ray_through(&self, u: f32, v: f32) -> Ray {
+        let origin =
+            self.zoom * vec3(u * self.aspect_ratio, v, 0.) + self.location;
+        let direction = -Vec3::unit_z();
+        Ray { origin, direction }
     }
 }

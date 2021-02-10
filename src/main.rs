@@ -1,9 +1,8 @@
 use clap::{App, Arg};
 use glam::f32::vec3;
 use glam::Vec3;
-use image::{ImageBuffer, Rgb, RgbImage};
-use ray_tracer::Ray;
-use ray_tracer::Sphere;
+use image::{ImageBuffer, Rgb};
+use ray_tracer::{Camera, OrthoCamera, PerspCamera, Sphere};
 
 fn main() {
     let matches = App::new(env!("CARGO_PKG_NAME"))
@@ -29,11 +28,17 @@ fn main() {
                 })
                 .help("Set output dimensions to <width>,<height>"),
         )
+        .arg(
+            Arg::with_name("orthographic")
+                .long("orthographic")
+                .help("Use orthographic projection not default (perspective)"),
+        )
         .get_matches();
 
     let output = "a.png";
     let output = matches.value_of("output").unwrap_or(output);
     let values = matches.values_of("dimensions").unwrap();
+    let orthographic = matches.is_present("orthographic");
 
     let width = 500;
     let height = 500;
@@ -49,31 +54,37 @@ fn main() {
         _ => (width, height),
     };
 
-    let mut imgbuf = ImageBuffer::new(width, height);
-
-    // Camera
-    let aspect_ratio = width as f32 / height as f32;
-    let viewort_height = 2.;
-    let viewport_width = aspect_ratio * viewort_height;
-    let focal_length = 1.;
-
-    let origin = Vec3::zero();
-    let horizontal = viewport_width * Vec3::unit_x();
-    let vertical = viewort_height * Vec3::unit_y();
-    let diagonal = focal_length * Vec3::unit_z();
-    let upper_left = origin + horizontal / 2. + vertical / 2. - diagonal;
-
     let sphere = Sphere {
         center: vec3(0., 0., -1.),
         radius: 0.5,
     };
-    imgbuf.enumerate_pixels_mut().for_each(|(x, y, pixel)| {
-        // Coordinates
-        let u = x as f32 / width as f32;
-        let v = y as f32 / height as f32;
 
-        let direction = upper_left - u * horizontal - v * vertical - origin;
-        let r = Ray { origin, direction };
+    let aspect_ratio = width as f32 / height as f32;
+    let zoom = 1.;
+
+    let persp_camera = PerspCamera {
+        location: vec3(0., 0., 0.),
+        //rotation: vec3(0., 0., 0.),
+        focal_length: 1.,
+        aspect_ratio,
+        zoom,
+    };
+    let ortho_camera = OrthoCamera {
+        location: vec3(0., 0., 0.),
+        //rotation: vec3(0., 0., 0.),
+        aspect_ratio,
+        zoom,
+    };
+
+    let imgbuf = ImageBuffer::from_fn(width, height, |x, y| {
+        let u = (x as f32 / width as f32) - 0.5;
+        let v = (1. - y as f32 / height as f32) - 0.5;
+
+        let r = if orthographic {
+            ortho_camera.ray_through(u, v)
+        } else {
+            persp_camera.ray_through(u, v)
+        };
 
         let t = sphere.intersects(&r);
 
@@ -88,7 +99,7 @@ fn main() {
         let r = (c.x * u8::MAX as f32) as u8;
         let g = (c.y * u8::MAX as f32) as u8;
         let b = (c.z * u8::MAX as f32) as u8;
-        *pixel = Rgb([r, g, b]);
+        Rgb([r, g, b])
     });
 
     imgbuf.save(output).unwrap();

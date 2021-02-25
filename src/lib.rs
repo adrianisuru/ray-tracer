@@ -9,6 +9,7 @@ pub struct Ray {
     direction: Vec3,
 }
 
+/// Represents a ray tracing ray
 impl Ray {
     pub fn new(origin: Vec3, direction: Vec3) -> Ray {
         Ray {
@@ -82,17 +83,20 @@ impl Surface for Sphere {
     }
 }
 
+/// A camera which uses perspective projection
 pub struct PerspCamera {
-    /// Location of the center of the viewport
+    /// Location of the center of the viewplane
     pub location: Vec3,
 
     //    /// Rotation around x, y, and z axis' represented by `rotation`'s x, y, and z
     //    /// corrdinates respectively
     //    pub rotation: Vec3,
-    /// Distance from eye to viewport
+    /// Distance from eye to viewplane
     pub focal_length: f32,
 
+    /// width of the viewplane divided by height of the viewplane
     pub aspect_ratio: f32,
+
     pub zoom: f32,
 }
 
@@ -110,13 +114,15 @@ pub trait Camera {
     fn ray_through(&self, u: f32, v: f32) -> Ray;
 }
 
+/// A camera which uses orthographic projection
 pub struct OrthoCamera {
-    /// Location of the center of the viewport
+    /// Location of the center of the viewplane
     pub location: Vec3,
 
     //    /// Rotation around x, y, and z axis' represented by `rotation`'s x, y, and z
     //    /// corrdinates respectively
     //    pub rotation: Vec3,
+    /// width of the viewplane divided by height of the viewplane
     pub aspect_ratio: f32,
 
     pub zoom: f32,
@@ -203,7 +209,7 @@ impl Surface for Triangle {
         let e2 = p2 - p0;
         let n = e1.cross(e2);
 
-        ray_tri_intersect(o, d, p0, p1, p2).map(|t| HitRecord {
+        ray_tri_intersect_mt(o, d, p0, p1, p2).map(|t| HitRecord {
             t,
             p: ray.at(t),
             n: Outer(n),
@@ -211,7 +217,37 @@ impl Surface for Triangle {
     }
 
     fn color(&self) -> Vec3 {
-        Vec3::new(0.5, 0.3, 0.1)
+        Vec3::new(0., 1., 0.)
+    }
+}
+
+fn ray_tri_intersect_mt(
+    o: Vec3,
+    d: Vec3,
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+) -> Option<f32> {
+    let e1 = p1 - p0;
+    let e2 = p2 - p0;
+
+    let q = d.cross(e2);
+    let a = e1.dot(q);
+    let eps = 10f32.powi(-5);
+    if -eps < a && a < eps {
+        None
+    } else {
+        let f = 1. / a;
+        let s = o - p0;
+        let u = f * s.dot(q);
+        let r = s.cross(e1);
+        let v = f * d.dot(r);
+        let t = f * e2.dot(r);
+        if u < 0. || v < 0. || u + v > 1. {
+            None
+        } else {
+            Some(t)
+        }
     }
 }
 
@@ -244,41 +280,12 @@ fn ray_tri_intersect(
     }
 }
 
-fn ray_tri_intersect_mt(
-    o: Vec3,
-    d: Vec3,
-    p0: Vec3,
-    p1: Vec3,
-    p2: Vec3,
-) -> Option<f32> {
-    let e1 = p1 - p0;
-    let e2 = p2 - p0;
-
-    let q = d.cross(e2);
-    let a = e1.dot(q);
-    let eps = 10f32.powi(-5);
-    if -eps < a && a < eps {
-        None
-    } else {
-        let f = 1. / a;
-        let s = o - p0;
-        let u = f * s.dot(q);
-        let r = s.cross(e1);
-        let v = f * d.dot(r);
-        let baryc = vec3(1. - u - v, u, v);
-        let t = f * e2.dot(r);
-        if baryc.min_element() < 0. {
-            None
-        } else {
-            Some(t)
-        }
-    }
-}
-
+/// Returns a random vector of length <= 1 using an rng
 pub fn random_unit_sphere(rng: &mut ThreadRng) -> Vec3 {
     random_unit_vector(rng) * rng.gen_range(0. ..1.)
 }
 
+/// Returns a random vector of length 1 using an rng
 pub fn random_unit_vector(rng: &mut ThreadRng) -> Vec3 {
     let resolution = 100.;
     let x = rng.gen_range(-resolution..resolution);

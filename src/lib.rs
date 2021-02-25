@@ -1,6 +1,9 @@
 use glam::f32::vec3;
-use glam::Vec3;
+use glam::{Mat3, Vec3};
+use rand::rngs::ThreadRng;
+use rand::Rng;
 
+#[derive(Copy, Clone, Debug)]
 pub struct Ray {
     origin: Vec3,
     direction: Vec3,
@@ -146,7 +149,7 @@ impl Surface for Plane {
             let t = (self.point - ray.origin).dot(self.normal) / dn;
 
             Some(HitRecord {
-                t: t,
+                t,
                 p: ray.at(t),
                 n: SurfaceNormal::new(ray.direction(), self.normal),
             })
@@ -186,4 +189,100 @@ pub struct HitRecord {
 pub trait Surface {
     fn hit(&self, ray: &Ray) -> Option<HitRecord>;
     fn color(&self) -> Vec3;
+}
+
+type Triangle = (Vec3, Vec3, Vec3);
+
+impl Surface for Triangle {
+    fn hit(&self, ray: &Ray) -> Option<HitRecord> {
+        let &(p0, p1, p2) = self;
+        let d = ray.direction();
+        let o = ray.origin();
+
+        let e1 = p1 - p0;
+        let e2 = p2 - p0;
+        let n = e1.cross(e2);
+
+        ray_tri_intersect(o, d, p0, p1, p2).map(|t| HitRecord {
+            t,
+            p: ray.at(t),
+            n: Outer(n),
+        })
+    }
+
+    fn color(&self) -> Vec3 {
+        Vec3::new(0.5, 0.3, 0.1)
+    }
+}
+
+fn ray_tri_intersect(
+    o: Vec3,
+    d: Vec3,
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+) -> Option<f32> {
+    let e1 = p1 - p0;
+    let e2 = p2 - p0;
+    let s = o - p0;
+
+    let m = Mat3::from_cols(-d, e1, e2);
+    let eps = 10f32.powi(-5);
+    let a = m.determinant();
+
+    if -eps < a && a < eps {
+        None
+    } else {
+        let t = Mat3::from_cols(s, e1, e2).determinant();
+        let u = Mat3::from_cols(-d, s, e2).determinant();
+        let v = Mat3::from_cols(-d, e1, s).determinant();
+        if u < 0. || v < 0. || u + v > 1. {
+            None
+        } else {
+            Some(t)
+        }
+    }
+}
+
+fn ray_tri_intersect_mt(
+    o: Vec3,
+    d: Vec3,
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+) -> Option<f32> {
+    let e1 = p1 - p0;
+    let e2 = p2 - p0;
+
+    let q = d.cross(e2);
+    let a = e1.dot(q);
+    let eps = 10f32.powi(-5);
+    if -eps < a && a < eps {
+        None
+    } else {
+        let f = 1. / a;
+        let s = o - p0;
+        let u = f * s.dot(q);
+        let r = s.cross(e1);
+        let v = f * d.dot(r);
+        let baryc = vec3(1. - u - v, u, v);
+        let t = f * e2.dot(r);
+        if baryc.min_element() < 0. {
+            None
+        } else {
+            Some(t)
+        }
+    }
+}
+
+pub fn random_unit_sphere(rng: &mut ThreadRng) -> Vec3 {
+    random_unit_vector(rng) * rng.gen_range(0. ..1.)
+}
+
+pub fn random_unit_vector(rng: &mut ThreadRng) -> Vec3 {
+    let resolution = 100.;
+    let x = rng.gen_range(-resolution..resolution);
+    let y = rng.gen_range(-resolution..resolution);
+    let z = rng.gen_range(-resolution..resolution);
+    Vec3::new(x, y, z).normalize()
 }

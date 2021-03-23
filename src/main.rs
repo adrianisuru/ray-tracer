@@ -2,14 +2,16 @@
 
 use clap::{App, Arg};
 use glam::f32::vec3;
+use glam::f32::vec4;
+use glam::f32::Vec4;
 use glam::Vec3;
 use image::{ImageBuffer, Rgb};
-use rand::Rng;
 use ray_tracer::{
-    Camera, HitRecord, Origin, OrthoCamera, PerspCamera, Plane, Sphere,
-    Surface, SurfaceNormal,
+    Camera, Origin, OrthoCamera, PerspCamera, Plane, Sphere, Surface,
+    SurfaceNormal, Viewplane, BVH,
 };
 use std::rc::Rc;
+use tobj::load_obj;
 
 fn main() {
     // This is used to validate that the arguments given for width and height
@@ -81,29 +83,29 @@ fn main() {
 
     // A few surfaces
     let sphere0 = Sphere {
-        center: vec3(0., 0., -1.),
+        center: vec4(0., 0., -1., 1.),
         radius: 0.5,
     };
     let sphere1 = Sphere {
-        center: vec3(-1., 0., -0.5),
+        center: vec4(-1., 0., -0.5, 1.),
         radius: 0.1,
     };
     let sphere2 = Sphere {
-        center: vec3(1., 0., -0.5),
+        center: vec4(1., 0., -0.5, 1.),
         radius: 0.1,
     };
     let sphere3 = Sphere {
-        center: vec3(0., 0.7, -0.5),
+        center: vec4(0., 0.7, -0.5, 1.),
         radius: 0.1,
     };
 
     let floor = Plane {
-        point: vec3(0., -0.1, 0.),
-        normal: Vec3::unit_y(),
+        point: vec4(0., -0.1, 0., 1.),
+        normal: Vec4::Y,
     };
     let wall = Plane {
-        point: vec3(0., 0., -3.),
-        normal: Vec3::unit_z(),
+        point: vec4(0., 0., -3., 1.),
+        normal: Vec4::Z,
     };
 
     let triangle = (
@@ -112,20 +114,26 @@ fn main() {
         vec3(0.68, -0.1, -1.5),
     );
 
+    let objs = load_obj("tepot.obj", false);
+
     let aspect_ratio = width as f32 / height as f32;
 
-    let persp_camera = PerspCamera {
-        location: vec3(0., 0., 0.),
-        //rotation: vec3(0., 0., 0.),
-        focal_length: 1.,
-        aspect_ratio,
-        zoom: 1.,
-    };
-    let ortho_camera = OrthoCamera {
-        location: vec3(0., 0., 0.),
-        //rotation: vec3(0., 0., 0.),
-        aspect_ratio,
-        zoom: 2.,
+    let persp_camera = PerspCamera::new(
+        vec3(0., 0., 0.5),
+        vec3(0., 0., -100.),
+        vec3(0., 1., 0.),
+    );
+
+    let ortho_camera = OrthoCamera::new(
+        vec3(0., 0., 0.),
+        vec3(0., 0., -10.),
+        vec3(0., 1., 0.),
+    );
+
+    let view_plane = Viewplane {
+        hres: width,
+        vres: height,
+        s: 1.,
     };
 
     // Since we may extend this to models unknown at compile time, use a reference
@@ -135,13 +143,22 @@ fn main() {
     surfaces.push(Rc::new(sphere1));
     surfaces.push(Rc::new(sphere2));
     surfaces.push(Rc::new(sphere3));
-    surfaces.push(Rc::new(floor));
-    surfaces.push(Rc::new(triangle));
+    //surfaces.push(Rc::new(floor));
+    //surfaces.push(Rc::new(triangle));
     //surfaces.push(Rc::new(wall));
+
+    let bvh = BVH::new(surfaces);
+    println!("{:?}", bvh.aabb());
+    if let BVH::Node(bv, left, right) = bvh.clone() {
+        println!("{:?}", left.aabb());
+        println!("{:?}", right.aabb());
+    }
+
+    let bvh = Rc::new(bvh);
 
     // A single point light
     // TODO: make this work for multiple lights
-    let light = vec3(10., 10., -0.5);
+    let light = vec3(5., 0., 0.);
 
     // Rng for jittering
     let mut rng = rand::thread_rng();
@@ -157,36 +174,17 @@ fn main() {
         // we generate one ray and one color for every sample
         let colors: Vec<Vec3> = (0..jitters)
             .map(|_| {
-                let x = x as f32;
-                let y = y as f32;
-
-                // if we use jittering, the ray is not sent directly through the center of the
-                // pixel
-                let dx: f32;
-                let dy: f32;
-
-                match jittering {
-                    Some(_) => {
-                        dx = rng.gen_range(0. ..1.);
-                        dy = rng.gen_range(0. ..1.);
-                    }
-                    // if no jittering then we shoot a ray through the point exactly
-                    None => {
-                        dx = 0.;
-                        dy = 0.;
+                let view = view_plane.view(x, y, 0.5, 0.5);
+                let r = {
+                    if orthographic {
+                        todo!();
+                        ortho_camera.ray_through(view)
+                    } else {
+                        persp_camera.ray_through(view)
                     }
                 };
 
-                // convert to camera coordinates
-                let u = ((x + dx) / width as f32) - 0.5;
-                let v = (1. - (y + dy) / height as f32) - 0.5;
-
-                // our ray r depends on which camera we use
-                let r = if orthographic {
-                    ortho_camera.ray_through(u, v)
-                } else {
-                    persp_camera.ray_through(u, v)
-                };
+                let surfaces = vec![bvh.clone()];
 
                 // iterate over all surfaces and find the surface which was intersected by the ray
                 // first (but not at a negative time value). Then use this surface to generate a
@@ -205,52 +203,58 @@ fn main() {
                     // if there was really a hit of some surface then find out what the color was
                     .map(|(surface, hit)| {
                         // V, L, N, and R for Phong reflection model
-                        let v = hit.p.ray_through(r.origin());
-                        let v = v.direction();
+                        //let v = hit.p.ray_through(r.origin());
+                        //let v = v.direction().normalize();
 
-                        // send a ray though the point light
-                        let l = hit.p.ray_through(light);
+                        //// send a ray though the point light
+                        //let l = hit.p.ray_through(light);
 
-                        // TODO: handle inner and outer differently
-                        let SurfaceNormal::Inner(n) | SurfaceNormal::Outer(n) =
-                            hit.n;
-                        let n = n.normalize();
+                        //// TODO: handle inner and outer differently
+                        //let SurfaceNormal::Inner(n) | SurfaceNormal::Outer(n) =
+                        //    hit.n;
+                        //let n = n.normalize();
 
-                        // reflection of l over n
-                        let r = r.direction() - 2. * r.direction().dot(n) * n;
-                        let r = r.normalize();
+                        //// reflection of l over n
+                        //let r = r.direction() - 2. * r.direction().dot(n) * n;
+                        //let r = r.normalize();
 
-                        // Send a ray to the point light for shadow generation
-                        let lt = (light - l.origin()).length();
+                        //// Send a ray to the point light for shadow generation
+                        //let lt = (light - l.origin()).length();
 
-                        let shadow_percent = 0.5;
+                        //let shadow_percent = 0.5;
                         // Loop over all the surfaces except the current one
-                        surfaces
-                            .iter()
-                            .filter(|s| !Rc::ptr_eq(s, surface)) // ignore the current surface
-                            .filter_map(|s| {
-                                s.hit(&l).filter(|h| h.t >= 0.).map(|h| (s, h)) // filter negative t values
-                            })
-                            .min_by(|(_, ha), (_, hb)| ha.t.total_cmp(&hb.t)) // closest intersected surface
-                            .filter(|(_, h)| h.t < lt) // if we hit the light first then filter out
-                            .map(|_| {
-                                // calculate shadows
+                        //surfaces
+                        //    .iter()
+                        //    .filter(|s| !Rc::ptr_eq(s, surface)) // ignore the current surface
+                        //    .filter_map(|s| {
+                        //        s.hit(&l).filter(|h| h.t >= 0.).map(|h| (s, h)) // filter negative t values
+                        //    })
+                        //    .min_by(|(_, ha), (_, hb)| ha.t.total_cmp(&hb.t)) // closest intersected surface
+                        //    .filter(|(_, h)| h.t < lt) // if we hit the light first then filter out
+                        //    .map(|_| {
+                        //        // calculate shadows
 
-                                surface
-                                    .color()
-                                    .lerp(Vec3::zero(), shadow_percent)
-                            })
-                            // if we do not hit a suface than shade via phong reflection model
-                            .unwrap_or({
-                                let s = shadow_percent;
-                                // Phong reflection model
-                                surface.color() * Vec3::one()
-                                    + surface.color()
-                                        * (l.direction().dot(n))
-                                        * (Vec3::one() * s)
-                                    + (surface.color() * r.dot(v))
-                                        * (Vec3::one() * s)
-                            })
+                        //        surface
+                        //            .color()
+                        //            .lerp(Vec3::zero(), shadow_percent)
+                        //    })
+                        //    // if we do not hit a suface than shade via phong reflection model
+                        //    .unwrap_or({
+                        //        let s = shadow_percent;
+                        //        // Phong reflection model
+                        //        surface.color() * Vec3::one()
+                        //            + surface.color()
+                        //                * (l.direction().dot(n))
+                        //                * (Vec3::one() * s)
+                        //            + (surface.color() * r.dot(v))
+                        //                * (Vec3::one() * s)
+                        //    })
+                        //let s = shadow_percent;
+                        // Phong reflection model
+                        // hit.c * Vec3::ONE
+                        //     + hit.c * (l.direction().dot(n)) * (Vec3::ONE * s)
+                        //     + (hit.c * r.dot(v)) * (Vec3::ONE * s)
+                        hit.c
                     })
                     // if we didnt hit any surface give it a neutral color
                     .unwrap_or({

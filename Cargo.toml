@@ -14,5 +14,6 @@ name = "ray-tracer"
 [dependencies]
 image = "0.23.12" # for png generation
 clap = "2.33.3" # for argument parsing
-glam = "0.12.0" # for linear algebra
+glam = "0.13.0" # for linear algebra
 rand = "0.8.3" # for random number generation
+tobj = "2.0.4" # for obj loading

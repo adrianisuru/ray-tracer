@@ -1,12 +1,17 @@
 #![feature(total_cmp)]
+#![feature(bool_to_option)]
+
 use glam::f32::vec2;
 use glam::f32::vec3;
+use glam::Vec4Swizzles;
 use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::f32;
 use std::iter::FromIterator;
 use std::rc::Rc;
+
+pub mod camera;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Ray {
@@ -22,11 +27,11 @@ impl Ray {
             direction: (direction, 0.).into(),
         }
     }
-    pub fn origin(&self) -> Vec4 {
-        self.origin
+    pub fn origin(&self) -> Vec3 {
+        self.origin.xyz()
     }
-    pub fn direction(&self) -> Vec4 {
-        self.direction
+    pub fn direction(&self) -> Vec3 {
+        self.direction.xyz()
     }
     /// Computes the position `P(t)` of this ray at time `t`, according to the
     /// function `P(t) = origin + direction * t`.
@@ -61,14 +66,15 @@ impl Origin for Vec3 {
 pub struct Sphere {
     pub center: Vec4,
     pub radius: f32,
+    pub color: Vec3,
 }
 
 impl Surface for Sphere {
     /// Checks if ray intersects this sphere
     fn hit(&self, ray: &Ray) -> Option<HitRecord> {
-        let oc = ray.origin() - self.center;
+        let oc = ray.origin - self.center;
         let a = ray.direction().dot(ray.direction());
-        let b = 2. * oc.dot(ray.direction());
+        let b = 2. * oc.dot(ray.direction);
         let c = oc.dot(oc) - self.radius.powi(2);
         let discriminant = b * b - 4. * a * c;
 
@@ -80,7 +86,7 @@ impl Surface for Sphere {
                 t,
                 p: ray.at(t),
                 n: SurfaceNormal::new(ray.direction, ray.at(t) - self.center),
-                c: vec3(1., 0., 0.),
+                c: self.color,
             })
         }
     }
@@ -90,101 +96,6 @@ impl Surface for Sphere {
             min: self.center - (Vec3::splat(self.radius), 0.).into(),
             max: self.center + (Vec3::splat(self.radius), 0.).into(),
         })
-    }
-}
-
-pub struct Viewplane {
-    pub hres: u32,
-    pub vres: u32,
-    pub s: f32,
-}
-
-impl Viewplane {
-    /// Returns xy coordinates in camera space from row column and pixel offsets
-    pub fn view(&self, c: u32, r: u32, px: f32, py: f32) -> Vec2 {
-        let s = self.s as f32;
-        let hres = self.hres as f32;
-        let vres = self.vres as f32;
-        let i = vec2(c as f32, vres - (r as f32));
-        let res = vec2(hres, vres);
-        let p = vec2(px, py);
-
-        let c = c as f32;
-        let r = r as f32;
-
-        vec2(
-            s * (c - (hres / 2.) + px),
-            s * (vres - r - (vres / 2.) + py),
-        )
-    }
-}
-
-/// A camera which uses perspective projection
-pub struct PerspCamera {
-    /// Origin of all rays generated with this camera, origin of this camera's
-    /// local euclidian frame
-    eye: Vec3,
-    /// Distance between eye and the viewplane
-    distance: f32,
-    /// Orthonormal basis of this camera's local euclidian frame
-    onb: Mat3,
-}
-
-impl PerspCamera {
-    pub fn new(eye: Vec3, lookat: Vec3, up: Vec3) -> PerspCamera {
-        let w = (eye - lookat).normalize();
-        let u = up.cross(w).normalize();
-        let v = w.cross(u).normalize();
-
-        PerspCamera {
-            eye,
-            distance: (eye - lookat).length(),
-            onb: Mat3::from_cols(u, v, w),
-        }
-    }
-}
-
-impl Camera for PerspCamera {
-    fn ray_through(&self, v: Vec2) -> Ray {
-        let eye = self.eye;
-        let onb = self.onb;
-        let d = self.distance;
-        let c: Vec3 = (v, -d).into();
-
-        Ray::new(eye, onb * c + eye)
-    }
-}
-
-pub trait Camera {
-    fn ray_through(&self, v: Vec2) -> Ray;
-}
-
-// TODO this camera is broken
-/// A camera which uses orthographic projection
-pub struct OrthoCamera {
-    /// Location of the center of the viewplane
-    pub eye: Vec3,
-    onb: Mat3,
-}
-
-impl OrthoCamera {
-    pub fn new(eye: Vec3, lookat: Vec3, up: Vec3) -> OrthoCamera {
-        let w = (eye - lookat).normalize();
-        let u = up.cross(w).normalize();
-        let v = w.cross(u).normalize();
-
-        OrthoCamera {
-            eye,
-            onb: Mat3::from_cols(u, v, w),
-        }
-    }
-}
-
-impl Camera for OrthoCamera {
-    fn ray_through(&self, v: Vec2) -> Ray {
-        let onb = self.onb;
-        let o: Vec3 = (v, 0.).into();
-        Ray::new(onb * o, onb * (Vec3::Z))
     }
 }
 
@@ -199,7 +110,7 @@ use SurfaceNormal::*;
 
 impl Surface for Plane {
     fn hit(&self, ray: &Ray) -> Option<HitRecord> {
-        let dn = ray.direction().dot(self.normal);
+        let dn = ray.direction.dot(self.normal);
         if dn == 0. {
             None
         } else {
@@ -208,7 +119,7 @@ impl Surface for Plane {
             Some(HitRecord {
                 t,
                 p: ray.at(t),
-                n: SurfaceNormal::new(ray.direction(), self.normal),
+                n: SurfaceNormal::new(ray.direction, self.normal),
                 c: vec3(0.3, 0.3, 0.3),
             })
         }
@@ -363,18 +274,18 @@ pub fn random_unit_vector(rng: &mut ThreadRng) -> Vec3 {
 #[derive(Copy, Clone, Debug)]
 pub struct AABB {
     /// Lower left back of this bounding box
-    min: Vec4,
+    pub min: Vec4,
 
     /// Upper right front of this bounding box
-    max: Vec4,
+    pub max: Vec4,
 }
 
 impl AABB {
     fn hit(&self, ray: &Ray) -> bool {
         let d = Mat3::from_diagonal(ray.direction().into());
         let inv = d.inverse();
-        let b_min: Vec3 = (self.min - ray.origin()).into();
-        let b_max: Vec3 = (self.max - ray.origin()).into();
+        let b_min: Vec3 = (self.min - ray.origin).into();
+        let b_max: Vec3 = (self.max - ray.origin).into();
         let t_min: Vec3 = d.inverse() * b_min;
         let t_max: Vec3 = d.inverse() * b_max;
 
@@ -409,26 +320,15 @@ impl Surface for BVH {
     fn hit(&self, ray: &Ray) -> Option<HitRecord> {
         match self {
             Self::Leaf(surface) => surface.hit(&ray),
-            Self::Node(bv, left, right) => {
-                if bv.hit(&ray) {
-                    let hit = [left, right]
+            Self::Node(bv, left, right) => bv
+                .hit(&ray)
+                .then(|| {
+                    [left, right]
                         .iter()
-                        .filter_map(|s| {
-                            s.aabb().and_then(|bb| {
-                                if bb.hit(&ray) {
-                                    s.hit(&ray)
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                        .min_by(|hit1, hit2| hit1.t.total_cmp(&hit2.t));
-                    println!("{:?}", hit);
-                    hit
-                } else {
-                    None
-                }
-            }
+                        .filter_map(|bvh| bvh.hit(&ray))
+                        .min_by(|hit1, hit2| hit1.t.total_cmp(&hit2.t))
+                })
+                .flatten(),
         }
     }
 
@@ -555,10 +455,6 @@ fn recursive_build_bvh(nodes: Vec<BVH>) -> BVH {
     });
 
     let i = nodes.len() / 2;
-    let s = Sphere {
-        center: Vec4::W,
-        radius: 1.,
-    };
 
     let left = recursive_build_bvh(nodes[..i].to_vec());
     let right = recursive_build_bvh(nodes[i..].to_vec());
@@ -586,6 +482,56 @@ fn recursive_build_bvh(nodes: Vec<BVH>) -> BVH {
     Node(bv, Box::new(left), Box::new(right))
 }
 
-//impl FromIterator<Rc<dyn Surface>> for BVH {
-//    fn from_iter<T: IntoIterator<Item = Rc<dyn Surface>>>(iter: T) -> Self {}
-//}
+/// Struct which represents an affine transformation matrix.
+#[derive(Copy, Clone)]
+struct AffineTransformation {
+    /// The transformation matrix itself
+    mat: Mat4,
+    /// The transformation matrix's inverse.
+    inv: Mat4,
+}
+
+impl AffineTransformation {
+    const IDENTITY: AffineTransformation = Self {
+        mat: Mat4::IDENTITY,
+        inv: Mat4::IDENTITY,
+    };
+
+    pub fn tran(&self, new_origin: Vec3) -> Self {
+        let t =
+            Mat4::from_cols(Vec4::X, Vec4::Y, Vec4::Z, (new_origin, 1.).into());
+
+        AffineTransformation {
+            mat: t * self.mat,
+            inv: self.inv * t.inverse(),
+        }
+    }
+
+    pub fn scale(&self, scale: Vec3) -> Self {
+        let t = Mat4::from_scale(scale);
+
+        AffineTransformation {
+            mat: t * self.mat,
+            inv: self.inv * t.inverse(),
+        }
+    }
+
+    pub fn rot(&self, roll: f32, pitch: f32, yaw: f32) -> Self {
+        let t = Mat4::from_rotation_ypr(roll, pitch, yaw);
+
+        AffineTransformation {
+            mat: t * self.mat,
+            inv: self.inv * t.inverse(),
+        }
+    }
+
+    pub fn refl(&self, normal: Vec3) -> Self {
+        //TODO fix this
+        let t = Mat4::IDENTITY;
+
+        AffineTransformation {
+            mat: t * self.mat,
+            inv: self.inv * t.inverse(),
+        }
+    }
+}

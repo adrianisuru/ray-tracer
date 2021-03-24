@@ -4,12 +4,18 @@ use clap::{App, Arg};
 use glam::f32::vec3;
 use glam::f32::vec4;
 use glam::f32::Vec4;
-use glam::Vec3;
+
+use glam::f32::Mat3;
+use glam::f32::Vec3;
+use glam::Vec4Swizzles;
 use image::{ImageBuffer, Rgb};
+use rand::Rng;
+use ray_tracer::camera::{Camera, OrthoCamera, PerspCamera, Viewplane};
 use ray_tracer::{
-    Camera, Origin, OrthoCamera, PerspCamera, Plane, Sphere, Surface,
-    SurfaceNormal, Viewplane, BVH,
+    random_unit_vector, HitRecord, Origin, Plane, Ray, Sphere, Surface,
+    SurfaceNormal, AABB, BVH,
 };
+
 use std::rc::Rc;
 use tobj::load_obj;
 
@@ -85,18 +91,22 @@ fn main() {
     let sphere0 = Sphere {
         center: vec4(0., 0., -1., 1.),
         radius: 0.5,
+        color: vec3(1., 0., 1.),
     };
     let sphere1 = Sphere {
         center: vec4(-1., 0., -0.5, 1.),
         radius: 0.1,
+        color: vec3(1., 0., 1.),
     };
     let sphere2 = Sphere {
         center: vec4(1., 0., -0.5, 1.),
         radius: 0.1,
+        color: vec3(1., 0., 1.),
     };
     let sphere3 = Sphere {
         center: vec4(0., 0.7, -0.5, 1.),
         radius: 0.1,
+        color: vec3(1., 0., 1.),
     };
 
     let floor = Plane {
@@ -119,8 +129,8 @@ fn main() {
     let aspect_ratio = width as f32 / height as f32;
 
     let persp_camera = PerspCamera::new(
-        vec3(0., 0., 0.5),
-        vec3(0., 0., -100.),
+        vec3(0., 0., 1.),
+        vec3(0., 0., -200.),
         vec3(0., 1., 0.),
     );
 
@@ -139,33 +149,60 @@ fn main() {
     // Since we may extend this to models unknown at compile time, use a reference
     // counted pointer to each of our surfaces
     let mut surfaces: Vec<Rc<dyn Surface>> = Vec::new();
-    surfaces.push(Rc::new(sphere0));
-    surfaces.push(Rc::new(sphere1));
-    surfaces.push(Rc::new(sphere2));
-    surfaces.push(Rc::new(sphere3));
+    //surfaces.push(Rc::new(sphere0));
+    //surfaces.push(Rc::new(sphere1));
+    //surfaces.push(Rc::new(sphere2));
+    //surfaces.push(Rc::new(sphere3));
     //surfaces.push(Rc::new(floor));
     //surfaces.push(Rc::new(triangle));
     //surfaces.push(Rc::new(wall));
 
+    let min = vec4(-1., -1., -1., 1.);
+    let max = vec4(1., 1., -2., 1.);
+
+    let num_spheres = 10;
+    let bounds = AABB { min, max };
+
+    let (w, h, d) = (max - min).xyz().into();
+    let w = w.abs();
+    let h = h.abs();
+    let d = d.abs();
+
+    let mut rng = rand::thread_rng();
+
+    let radius = 1. / 10.;
+
+    println!("radius: {}", radius);
+
+    let surfaces: Vec<Rc<dyn Surface>> = (0..num_spheres)
+        .map(|_| {
+            let x = min.x + rng.gen_range(0.0..w);
+            let y = min.y + rng.gen_range(0.0..h);
+            let z = min.z + rng.gen_range(0.0..d);
+
+            let center = vec4(x, y, z, 1.);
+            let color = random_unit_vector(&mut rng);
+
+            let sphere = Sphere {
+                center,
+                radius,
+                color,
+            };
+            Rc::new(sphere) as Rc<dyn Surface>
+        })
+        .collect();
+
     let bvh = BVH::new(surfaces);
-    println!("{:?}", bvh.aabb());
-    if let BVH::Node(bv, left, right) = bvh.clone() {
-        println!("{:?}", left.aabb());
-        println!("{:?}", right.aabb());
-    }
 
     let bvh = Rc::new(bvh);
 
     // A single point light
     // TODO: make this work for multiple lights
-    let light = vec3(5., 0., 0.);
-
-    // Rng for jittering
-    let mut rng = rand::thread_rng();
+    let light = vec3(5., 5., 0.);
 
     // ImageBuffer can generation images by iteration over pixels
     // (x, y) is the pixel and the return of the closure is the Rgb color value
-    let imgbuf = ImageBuffer::from_fn(width, height, |x, y| {
+    let imgbuf = ImageBuffer::from_fn(width, height, |row, col| {
         // If we have jittering then store the nummber in jitters
         let jitters = match jittering {
             Some(jitters) => jitters,
@@ -174,7 +211,7 @@ fn main() {
         // we generate one ray and one color for every sample
         let colors: Vec<Vec3> = (0..jitters)
             .map(|_| {
-                let view = view_plane.view(x, y, 0.5, 0.5);
+                let view = view_plane.view(row, col, 0.5, 0.5);
                 let r = {
                     if orthographic {
                         todo!();
@@ -193,69 +230,12 @@ fn main() {
                     .iter()
                     .filter_map(|surface| {
                         // filter out negative t values
-                        surface
-                            .hit(&r)
-                            .filter(|hit| hit.t >= 0.)
-                            .map(|hit| (surface, hit)) // we want the surface and the hitrecord
+                        surface.hit(&r).filter(|hit| hit.t >= 0.)
                     })
                     // get the closest intersected surface by taking the min of the t values
-                    .min_by(|(_a, hita), (_b, hitb)| hita.t.total_cmp(&hitb.t))
+                    .min_by(|hita, hitb| hita.t.total_cmp(&hitb.t))
                     // if there was really a hit of some surface then find out what the color was
-                    .map(|(surface, hit)| {
-                        // V, L, N, and R for Phong reflection model
-                        //let v = hit.p.ray_through(r.origin());
-                        //let v = v.direction().normalize();
-
-                        //// send a ray though the point light
-                        //let l = hit.p.ray_through(light);
-
-                        //// TODO: handle inner and outer differently
-                        //let SurfaceNormal::Inner(n) | SurfaceNormal::Outer(n) =
-                        //    hit.n;
-                        //let n = n.normalize();
-
-                        //// reflection of l over n
-                        //let r = r.direction() - 2. * r.direction().dot(n) * n;
-                        //let r = r.normalize();
-
-                        //// Send a ray to the point light for shadow generation
-                        //let lt = (light - l.origin()).length();
-
-                        //let shadow_percent = 0.5;
-                        // Loop over all the surfaces except the current one
-                        //surfaces
-                        //    .iter()
-                        //    .filter(|s| !Rc::ptr_eq(s, surface)) // ignore the current surface
-                        //    .filter_map(|s| {
-                        //        s.hit(&l).filter(|h| h.t >= 0.).map(|h| (s, h)) // filter negative t values
-                        //    })
-                        //    .min_by(|(_, ha), (_, hb)| ha.t.total_cmp(&hb.t)) // closest intersected surface
-                        //    .filter(|(_, h)| h.t < lt) // if we hit the light first then filter out
-                        //    .map(|_| {
-                        //        // calculate shadows
-
-                        //        surface
-                        //            .color()
-                        //            .lerp(Vec3::zero(), shadow_percent)
-                        //    })
-                        //    // if we do not hit a suface than shade via phong reflection model
-                        //    .unwrap_or({
-                        //        let s = shadow_percent;
-                        //        // Phong reflection model
-                        //        surface.color() * Vec3::one()
-                        //            + surface.color()
-                        //                * (l.direction().dot(n))
-                        //                * (Vec3::one() * s)
-                        //            + (surface.color() * r.dot(v))
-                        //                * (Vec3::one() * s)
-                        //    })
-                        //let s = shadow_percent;
-                        // Phong reflection model
-                        // hit.c * Vec3::ONE
-                        //     + hit.c * (l.direction().dot(n)) * (Vec3::ONE * s)
-                        //     + (hit.c * r.dot(v)) * (Vec3::ONE * s)
-                        hit.c
-                    })
+                    .map(|hit| phong_shade(hit, r, light))
                     // if we didnt hit any surface give it a neutral color
                     .unwrap_or({
                         // Sky
@@ -276,4 +256,37 @@ fn main() {
     });
 
     imgbuf.save(output).unwrap();
+}
+
+/// Calculates color based on hit information, ray, light position with phong reflection model
+fn phong_shade(hit: HitRecord, r: Ray, light: Vec3) -> Vec3 {
+    // V, L, N, and R for Phong reflection model
+    let v = hit.p.xyz().ray_through(r.origin());
+    let v = v.direction().normalize();
+
+    // send a ray though the point light
+    let l = hit.p.xyz().ray_through(light);
+    let l = l.direction().normalize();
+
+    let n = match hit.n {
+        SurfaceNormal::Outer(n) => -n,
+        SurfaceNormal::Inner(n) => n,
+    };
+
+    let n = n.xyz().normalize();
+
+    // reflection of l over n
+    let r = l - 2. * l.dot(n) * n;
+    let r = r.normalize();
+
+    let light_color = vec3(1.2, 1.2, 1.2);
+
+    // ambient diffuse and specular components
+    let ambient = 0.5 * light_color;
+    let diffuse = 0.0f32.max(n.dot(l)) * light_color;
+    let specular = 0.0f32.max(v.dot(r)).powi(8) * light_color;
+
+    let phong = ambient + diffuse + specular;
+
+    Mat3::from_diagonal(phong) * hit.c
 }

@@ -11,8 +11,10 @@ use glam::Vec4Swizzles;
 use image::{ImageBuffer, Rgb};
 use rand::Rng;
 use ray_tracer::camera::{Camera, OrthoCamera, PerspCamera, Viewplane};
+use ray_tracer::rand::random_in_box;
+use ray_tracer::triangle::Triangle;
 use ray_tracer::{
-    random_unit_vector, HitRecord, Origin, Plane, Ray, Sphere, Surface,
+    HitRecord, MeshTriangle, Origin, Plane, Ray, Sphere, Surface,
     SurfaceNormal, AABB, BVH,
 };
 
@@ -87,50 +89,27 @@ fn main() {
         _ => (width, height),
     };
 
-    // A few surfaces
-    let sphere0 = Sphere {
-        center: vec4(0., 0., -1., 1.),
-        radius: 0.5,
-        color: vec3(1., 0., 1.),
-    };
-    let sphere1 = Sphere {
-        center: vec4(-1., 0., -0.5, 1.),
-        radius: 0.1,
-        color: vec3(1., 0., 1.),
-    };
-    let sphere2 = Sphere {
-        center: vec4(1., 0., -0.5, 1.),
-        radius: 0.1,
-        color: vec3(1., 0., 1.),
-    };
-    let sphere3 = Sphere {
-        center: vec4(0., 0.7, -0.5, 1.),
-        radius: 0.1,
-        color: vec3(1., 0., 1.),
-    };
+    let mut surfaces: Vec<Rc<dyn Surface>> = Vec::new();
 
-    let floor = Plane {
-        point: vec4(0., -0.1, 0., 1.),
-        normal: Vec4::Y,
-    };
-    let wall = Plane {
-        point: vec4(0., 0., -3., 1.),
-        normal: Vec4::Z,
-    };
+    //let mesh_bvh = gen_mesh("teapot.obj");
+    //surfaces.push(Rc::new(mesh_bvh));
 
-    let triangle = (
-        vec3(0.7, -0.1, -0.5),
-        vec3(0.75, 0.9, -1.),
-        vec3(0.68, -0.1, -1.5),
+    let min = vec4(-1., -1., -1., 1.);
+    let max = vec4(1., 1., 1., 1.);
+
+    let num_spheres = 100;
+    let spheres = gen_spheres(
+        AABB { min, max },
+        num_spheres,
+        1. / (num_spheres as f32).sqrt(),
     );
+    let spheres = BVH::new(spheres);
 
-    let objs = load_obj("tepot.obj", false);
-
-    let aspect_ratio = width as f32 / height as f32;
+    surfaces.push(Rc::new(spheres));
 
     let persp_camera = PerspCamera::new(
-        vec3(0., 0., 1.),
-        vec3(0., 0., -200.),
+        vec3(0., 0., 10.),
+        vec3(0., 0., -90000.),
         vec3(0., 1., 0.),
     );
 
@@ -143,85 +122,28 @@ fn main() {
     let view_plane = Viewplane {
         hres: width,
         vres: height,
-        s: 1.,
+        s: 25.,
     };
-
-    // Since we may extend this to models unknown at compile time, use a reference
-    // counted pointer to each of our surfaces
-    let mut surfaces: Vec<Rc<dyn Surface>> = Vec::new();
-    //surfaces.push(Rc::new(sphere0));
-    //surfaces.push(Rc::new(sphere1));
-    //surfaces.push(Rc::new(sphere2));
-    //surfaces.push(Rc::new(sphere3));
-    //surfaces.push(Rc::new(floor));
-    //surfaces.push(Rc::new(triangle));
-    //surfaces.push(Rc::new(wall));
-
-    let min = vec4(-1., -1., -1., 1.);
-    let max = vec4(1., 1., -2., 1.);
-
-    let num_spheres = 10;
-    let bounds = AABB { min, max };
-
-    let (w, h, d) = (max - min).xyz().into();
-    let w = w.abs();
-    let h = h.abs();
-    let d = d.abs();
-
-    let mut rng = rand::thread_rng();
-
-    let radius = 1. / 10.;
-
-    println!("radius: {}", radius);
-
-    let surfaces: Vec<Rc<dyn Surface>> = (0..num_spheres)
-        .map(|_| {
-            let x = min.x + rng.gen_range(0.0..w);
-            let y = min.y + rng.gen_range(0.0..h);
-            let z = min.z + rng.gen_range(0.0..d);
-
-            let center = vec4(x, y, z, 1.);
-            let color = random_unit_vector(&mut rng);
-
-            let sphere = Sphere {
-                center,
-                radius,
-                color,
-            };
-            Rc::new(sphere) as Rc<dyn Surface>
-        })
-        .collect();
-
-    let bvh = BVH::new(surfaces);
-
-    let bvh = Rc::new(bvh);
 
     // A single point light
     // TODO: make this work for multiple lights
-    let light = vec3(5., 5., 0.);
+    let light = vec3(0., 1000., 0.);
 
-    // ImageBuffer can generation images by iteration over pixels
+    // ImageBuffer can generate images by iteration over pixels
     // (x, y) is the pixel and the return of the closure is the Rgb color value
     let imgbuf = ImageBuffer::from_fn(width, height, |row, col| {
-        // If we have jittering then store the nummber in jitters
-        let jitters = match jittering {
-            Some(jitters) => jitters,
-            None => 1,
-        };
         // we generate one ray and one color for every sample
-        let colors: Vec<Vec3> = (0..jitters)
+        let samples = 1;
+        let colors: Vec<Vec3> = (0..samples)
             .map(|_| {
                 let view = view_plane.view(row, col, 0.5, 0.5);
                 let r = {
                     if orthographic {
-                        todo!();
                         ortho_camera.ray_through(view)
                     } else {
                         persp_camera.ray_through(view)
                     }
                 };
-
-                let surfaces = vec![bvh.clone()];
 
                 // iterate over all surfaces and find the surface which was intersected by the ray
                 // first (but not at a negative time value). Then use this surface to generate a
@@ -246,7 +168,7 @@ fn main() {
             .collect();
 
         // Average of all the colors calculated for each jitter
-        let c: Vec3 = colors.iter().sum::<Vec3>() * (1. / jitters as f32);
+        let c: Vec3 = colors.iter().sum::<Vec3>() * (1. / samples as f32);
 
         // RgbImage generates the image from u8 slices so we have to convert c
         let r = (c.x * u8::MAX as f32) as u8;
@@ -268,15 +190,12 @@ fn phong_shade(hit: HitRecord, r: Ray, light: Vec3) -> Vec3 {
     let l = hit.p.xyz().ray_through(light);
     let l = l.direction().normalize();
 
-    let n = match hit.n {
-        SurfaceNormal::Outer(n) => -n,
-        SurfaceNormal::Inner(n) => n,
-    };
+    let SurfaceNormal::Outer(n) | SurfaceNormal::Inner(n) = hit.n;
 
     let n = n.xyz().normalize();
 
     // reflection of l over n
-    let r = l - 2. * l.dot(n) * n;
+    let r = 2. * l.dot(n) * n - l;
     let r = r.normalize();
 
     let light_color = vec3(1.2, 1.2, 1.2);
@@ -289,4 +208,106 @@ fn phong_shade(hit: HitRecord, r: Ray, light: Vec3) -> Vec3 {
     let phong = ambient + diffuse + specular;
 
     Mat3::from_diagonal(phong) * hit.c
+}
+
+/// Generates a mesh BVH from an obj file
+fn gen_mesh(filename: &str) -> BVH {
+    // parse the obj file
+    let objs = load_obj(filename, true).unwrap();
+
+    // assuming there is at least one model in the obj file we can get the first model
+    let models = objs.0;
+    let model = models.iter().next().unwrap();
+
+    let mut mesh = model.mesh.clone();
+    let normals = &mut mesh.normals;
+    let positions = &mesh.positions;
+    let indices = &mesh.indices;
+    assert!(indices.len() != 0);
+
+    normals.resize(positions.len(), 0.);
+
+    // Compute area weighted normals
+    for idxs in indices.chunks(3) {
+        let astart = 3 * idxs[0] as usize;
+        let bstart = 3 * idxs[1] as usize;
+        let cstart = 3 * idxs[2] as usize;
+
+        let aend = astart + 3;
+        let bend = bstart + 3;
+        let cend = cstart + 3;
+
+        let arange = astart..aend;
+        let brange = bstart..bend;
+        let crange = cstart..cend;
+
+        let a = &positions[arange.clone()];
+        let b = &positions[brange.clone()];
+        let c = &positions[crange.clone()];
+
+        let a = Vec3::from_slice_unaligned(a);
+        let b = Vec3::from_slice_unaligned(b);
+        let c = Vec3::from_slice_unaligned(c);
+
+        let triangle = Triangle { a, b, c };
+        let normal = triangle.normal().unwrap_or(Vec3::ZERO) * triangle.area();
+
+        let asum =
+            Vec3::from_slice_unaligned(&normals[arange.clone()]) + normal;
+        let bsum =
+            Vec3::from_slice_unaligned(&normals[brange.clone()]) + normal;
+        let csum =
+            Vec3::from_slice_unaligned(&normals[crange.clone()]) + normal;
+
+        asum.write_to_slice_unaligned(&mut normals[arange]);
+        bsum.write_to_slice_unaligned(&mut normals[brange]);
+        csum.write_to_slice_unaligned(&mut normals[crange]);
+    }
+
+    // Normalize area weighted normals
+    for normal in &mut normals.chunks_mut(3) {
+        let n = Vec3::from_slice_unaligned(normal);
+        n.normalize().write_to_slice_unaligned(normal);
+    }
+
+    let indices = &mesh.indices;
+    let mesh = &mesh;
+
+    let mut triangles: Vec<Rc<dyn Surface>> = indices
+        .chunks(3)
+        .enumerate()
+        .map(|(i, _)| Rc::new(MeshTriangle::new(mesh, i)) as Rc<dyn Surface>)
+        .collect();
+
+    BVH::new(triangles)
+}
+
+/// Generates a sphere bvh
+fn gen_spheres(
+    bounds: AABB,
+    num_spheres: u32,
+    radius: f32,
+) -> Vec<Rc<dyn Surface>> {
+    let mut rng = rand::thread_rng();
+
+    (0..num_spheres)
+        .map(|_| {
+            let center = random_in_box(&mut rng, bounds);
+            let color = random_in_box(
+                &mut rng,
+                AABB {
+                    min: Vec4::ZERO,
+                    max: Vec4::ONE,
+                },
+            )
+            .xyz();
+
+            let sphere = Sphere {
+                center,
+                radius,
+                color,
+            };
+            Rc::new(sphere) as Rc<dyn Surface>
+        })
+        .collect()
 }

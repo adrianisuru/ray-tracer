@@ -1,17 +1,19 @@
 #![feature(total_cmp)]
 #![feature(bool_to_option)]
 
-use glam::f32::vec2;
 use glam::f32::vec3;
 use glam::Vec4Swizzles;
-use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
-use rand::rngs::ThreadRng;
-use rand::Rng;
+use glam::{Mat3, Mat4, Vec3, Vec4};
 use std::f32;
-use std::iter::FromIterator;
 use std::rc::Rc;
+use tobj::Mesh;
+//use triangle::lib32::Triangle;
 
 pub mod camera;
+pub mod rand;
+pub mod triangle;
+
+use crate::triangle::Triangle;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Ray {
@@ -169,11 +171,11 @@ pub trait Surface {
     fn aabb(&self) -> Option<AABB>;
 }
 
-type Triangle = (Vec3, Vec3, Vec3);
-
 impl Surface for Triangle {
     fn hit(&self, ray: &Ray) -> Option<HitRecord> {
-        let &(p0, p1, p2) = self;
+        let p0 = self.a;
+        let p1 = self.b;
+        let p2 = self.c;
         let d = ray.direction();
         let o = ray.origin();
 
@@ -192,7 +194,10 @@ impl Surface for Triangle {
     }
 
     fn aabb(&self) -> Option<AABB> {
-        todo!()
+        let [min, max] = self.bounding_box();
+        let min = (min, 1.).into();
+        let max = (max, 1.).into();
+        Some(AABB { min, max })
     }
 }
 
@@ -254,20 +259,6 @@ fn ray_tri_intersect(
             Some(t)
         }
     }
-}
-
-/// Returns a random vector of length <= 1 using an rng
-pub fn random_unit_sphere(rng: &mut ThreadRng) -> Vec3 {
-    random_unit_vector(rng) * rng.gen_range(0. ..1.)
-}
-
-/// Returns a random vector of length 1 using an rng
-pub fn random_unit_vector(rng: &mut ThreadRng) -> Vec3 {
-    let resolution = 100.;
-    let x = rng.gen_range(-resolution..resolution);
-    let y = rng.gen_range(-resolution..resolution);
-    let z = rng.gen_range(-resolution..resolution);
-    Vec3::new(x, y, z).normalize()
 }
 
 /// Axis aligned bounding box
@@ -533,5 +524,80 @@ impl AffineTransformation {
             mat: t * self.mat,
             inv: self.inv * t.inverse(),
         }
+    }
+}
+
+pub struct MeshTriangle {
+    positions: Triangle,
+    normals: Triangle,
+}
+
+impl MeshTriangle {
+    /// Create a new MeshTriangle from the triangle_idx'th triangle in mesh
+    pub fn new(mesh: &Mesh, triangle_idx: usize) -> MeshTriangle {
+        let indices = &mesh.indices;
+        let positions = &mesh.positions;
+        let normals = &mesh.normals;
+
+        let aidx = indices[3 * triangle_idx + 0] as usize;
+        let bidx = indices[3 * triangle_idx + 1] as usize;
+        let cidx = indices[3 * triangle_idx + 2] as usize;
+
+        let astart = 3 * aidx;
+        let bstart = 3 * bidx;
+        let cstart = 3 * cidx;
+
+        let aend = astart + 3;
+        let bend = bstart + 3;
+        let cend = cstart + 3;
+
+        let arange = astart..aend;
+        let brange = bstart..bend;
+        let crange = cstart..cend;
+
+        let apos = &positions[arange.clone()];
+        let bpos = &positions[brange.clone()];
+        let cpos = &positions[crange.clone()];
+
+        let anorm = &normals[arange];
+        let bnorm = &normals[brange];
+        let cnorm = &normals[crange];
+
+        let positions = {
+            let a = Vec3::from_slice_unaligned(apos);
+            let b = Vec3::from_slice_unaligned(bpos);
+            let c = Vec3::from_slice_unaligned(cpos);
+
+            Triangle { a, b, c }
+        };
+
+        let normals = {
+            let a = Vec3::from_slice_unaligned(anorm);
+            let b = Vec3::from_slice_unaligned(bnorm);
+            let c = Vec3::from_slice_unaligned(cnorm);
+
+            Triangle { a, b, c }
+        };
+
+        MeshTriangle { positions, normals }
+    }
+}
+
+impl Surface for MeshTriangle {
+    fn hit(&self, ray: &Ray) -> Option<HitRecord> {
+        self.positions.hit(&ray).map(|hit| {
+            let p = hit.p;
+            let bary = self.positions.cartesian_to_barycentric(&p.truncate());
+            let normal =
+                self.normals.barycentric_to_cartesian(&bary).normalize();
+            HitRecord {
+                n: Outer((normal, 0.).into()),
+                ..hit
+            }
+        })
+    }
+
+    fn aabb(&self) -> Option<AABB> {
+        self.positions.aabb()
     }
 }

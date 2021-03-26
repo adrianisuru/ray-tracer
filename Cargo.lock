@@ -382,6 +382,7 @@ dependencies = [
  "image",
  "rand",
  "tobj",
+ "triangle",
 ]
 
 [[package]]
@@ -452,6 +453,12 @@ name = "tobj"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2468f55be8e59cf7219f1685cf1af4eb00ef2314823a7941a41c8d69538f881b"
+
+[[package]]
+name = "triangle"
+version = "0.1.351"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "748f8f1b253318a94b947e29f3553c2d0a0b24ad510d6ba550e6a0206d00f34a"
 
 [[package]]
 name = "unicode-width"

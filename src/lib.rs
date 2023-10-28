@@ -1,6 +1,3 @@
-#![feature(total_cmp)]
-#![feature(bool_to_option)]
-
 use glam::f32::vec3;
 use glam::Vec4Swizzles;
 use glam::{Mat3, Mat4, Vec3, Vec4};

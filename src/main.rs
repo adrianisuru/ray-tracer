@@ -1,5 +1,3 @@
-#![feature(total_cmp, or_patterns)]
-
 use clap::{App, Arg};
 use glam::f32::vec3;
 use glam::f32::vec4;
@@ -190,7 +188,7 @@ fn phong_shade(hit: HitRecord, r: Ray, light: Vec3) -> Vec3 {
     let l = hit.p.xyz().ray_through(light);
     let l = l.direction().normalize();
 
-    let SurfaceNormal::Outer(n) | SurfaceNormal::Inner(n) = hit.n;
+    let (SurfaceNormal::Outer(n) | SurfaceNormal::Inner(n)) = hit.n;
 
     let n = n.xyz().normalize();
 
